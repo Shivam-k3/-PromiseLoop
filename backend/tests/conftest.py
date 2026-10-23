@@ -15,6 +15,7 @@ if TEST_DB.exists():
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{TEST_DB.as_posix()}"
 os.environ["SEED_API_KEY"] = "pl_seed_test_key"
 os.environ["LLM_PROVIDER"] = "mock"
+os.environ["MCP_TRANSPORT"] = "memory"
 os.environ["ENVIRONMENT"] = "test"
 
 import pytest  # noqa: E402

@@ -302,7 +302,15 @@ def _build_deadline(
 
     question = None
     if ambiguous:
-        question = f"Which {date_label.strip()} do you mean? I have pencilled in {day}."
+        date_text = re.sub(
+            r"^(?:by|before|on|until|due|no later than)\s+",
+            "",
+            date_label.strip(),
+            flags=re.IGNORECASE,
+        )
+        question = (
+            f"Which {date_text.title()} do you mean? I have pencilled in {day}."
+        )
 
     return Deadline(
         date=day,

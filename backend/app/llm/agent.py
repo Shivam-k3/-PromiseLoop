@@ -7,6 +7,7 @@ it and the user has to confirm before the MCP tool actually writes anything.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,11 +25,20 @@ a person makes to other people and to themselves.
 
 Rules:
 - Read real records with the tools. Never invent commitments, dates, counts or ids.
-- To capture a new promise call `create_commitment` with a short title, the recipient, \
-and the deadline as natural language in `due_text` (for example "tomorrow evening").
+- Only call `create_commitment` when the user is stating a real promise or task they \
+intend to keep. Do not call it for hypotheticals, examples, quoted text, or unrelated \
+questions.
+- To capture a new promise call `create_commitment` with a short title, the recipient \
+when stated, and the deadline as natural language in `due_text` (for example "tomorrow \
+evening"). A personal task can have no recipient.
+- Keep the user's own wording in the title, including possessives: "Finish my report", \
+not "Finish report".
+- Never invent an amount, recipient, deadline or dependency. Leave missing details out \
+and ask for them when you present the confirmation.
 - A `create_commitment` proposal is not saved yet: the tool answers \
 `awaiting_confirmation`. When that happens, ask the user to confirm and repeat exactly \
 what you captured (task, who, when).
+- If the user asks an unrelated question, answer briefly and do not call a tool.
 - The user's timezone is {timezone}. Give deadlines in that timezone and prefer \
 `due_text` over computing timestamps yourself.
 - Keep replies short, warm and concrete. No lists of every tool you called.
@@ -71,21 +81,24 @@ async def run_turn(
                     tools_used=tools_used,
                 )
 
+            tool_calls = []
+            for call in response.tool_calls:
+                tool_call = {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments),
+                    },
+                }
+                if call.extra_content:
+                    tool_call["extra_content"] = call.extra_content
+                tool_calls.append(tool_call)
             conversation.append(
                 {
                     "role": "assistant",
                     "content": response.content or "",
-                    "tool_calls": [
-                        {
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.name,
-                                "arguments": json.dumps(call.arguments),
-                            },
-                        }
-                        for call in response.tool_calls
-                    ],
+                    "tool_calls": tool_calls,
                 }
             )
 
@@ -135,6 +148,23 @@ def _stage_write(call: ToolCall, timezone: str) -> tuple[dict[str, Any], dict[st
     """Turn a create_commitment call into a proposal the user has to confirm."""
     arguments = {key: value for key, value in call.arguments.items() if value is not None}
     arguments["timezone"] = timezone
+
+    title = str(arguments.get("title") or "").strip()
+    title = re.sub(
+        r"^(?:i['’]?ll|i will|i promised?(?: to)?|i need to|i have to|i must)\s+",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    ).strip()
+    if title:
+        title = title[0].upper() + title[1:]
+    arguments["title"] = title
+
+    recipient = arguments.get("recipient")
+    if isinstance(recipient, str):
+        arguments["recipient"] = re.sub(
+            r"^(?:my|our|the)\s+", "", recipient.strip(), flags=re.IGNORECASE
+        ) or None
 
     deadline = None
     if arguments.get("due_text") and not arguments.get("due_at"):

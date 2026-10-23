@@ -86,7 +86,14 @@ class MockProvider:
     # ------------------------------------------------------------------ #
     def _intent(self, text: str) -> str:
         lowered = text.lower()
-        if COMPLETE_PATTERN.search(lowered) and not re.search(r"\bpromis", lowered):
+        forward_looking = re.search(
+            r"\b(?:need to|have to|must|going to)\b|i['’]?ll|\bi will\b", lowered
+        )
+        if (
+            COMPLETE_PATTERN.search(lowered)
+            and not re.search(r"\bpromis", lowered)
+            and not forward_looking
+        ):
             return "complete"
         if NEXT_PATTERN.search(lowered):
             return "next"

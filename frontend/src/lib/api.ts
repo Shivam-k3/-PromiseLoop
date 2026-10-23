@@ -5,6 +5,8 @@ import type {
   Commitment,
   CommitmentInput,
   Dashboard,
+  McpReadResult,
+  McpStatus,
 } from "@/types"
 
 const API_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "")
@@ -101,4 +103,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ draft }),
     }),
+
+  mcpStatus: () => request<McpStatus>("/api/mcp/status"),
+
+  mcpRead: () => request<McpReadResult>("/api/mcp/read", { method: "POST" }),
 }

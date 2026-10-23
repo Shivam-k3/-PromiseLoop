@@ -22,22 +22,54 @@ PATTERNS: list[tuple[re.Pattern[str], bool]] = [
         True,
     ),
     (
-        re.compile(r"\b(?P<who>[A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*)?)\s+asked me to\s+(?P<action>.+)"),
-        True,
-    ),
-    (
-        re.compile(r"\bi\s+promised\s+(?P<who>[A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*)?)\s+(?P<action>.+)"),
+        re.compile(
+            r"\bi\s+told\s+(?P<who>[A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*)?)\s+"
+            r"(?:that\s+)?(?:i['’]?(?:ll| will| shall| should| am going to| need to| have to| must)|to)\s+"
+            r"(?P<action>.+)",
+            re.IGNORECASE,
+        ),
         True,
     ),
     (
         re.compile(
-            r"\bi\s+(?:['’]?ll|will|shall|should|need to|have to|must|am going to)\s+(?P<action>.+)"
+            r"\b(?P<who>[A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*)?)\s+asked me to\s+(?P<action>.+)",
+            re.IGNORECASE,
+        ),
+        True,
+    ),
+    (
+        re.compile(
+            r"\bi\s+promised\s+(?P<who>[A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*)?)\s+(?P<action>.+)",
+            re.IGNORECASE,
+        ),
+        True,
+    ),
+    (
+        re.compile(r"\bi\s+promise(?:d)?\s+to\s+(?P<action>.+)", re.IGNORECASE),
+        False,
+    ),
+    (
+        re.compile(
+            r"\bi(?:['’]?ll|\s+(?:will|shall|should|need to|have to|must|am going to))\s+(?P<action>.+)",
+            re.IGNORECASE,
         ),
         False,
     ),
-    (re.compile(r"\bremind me to\s+(?P<action>.+)"), False),
-    (re.compile(r"\bdon['’]?t forget to\s+(?P<action>.+)"), False),
+    (re.compile(r"\bremind me to\s+(?P<action>.+)", re.IGNORECASE), False),
+    (re.compile(r"\bdon['’]?t forget to\s+(?P<action>.+)", re.IGNORECASE), False),
 ]
+
+RELATIONSHIP_PATTERN = re.compile(
+    r"\b(?:to|for)\s+my\s+"
+    r"(sister|brother|mother|mom|mum|father|dad|wife|husband|partner|friend|"
+    r"boyfriend|girlfriend|colleague|coworker|manager|boss|son|daughter|parent|parents)\b",
+    re.IGNORECASE,
+)
+
+HYPOTHETICAL = re.compile(
+    r"^\s*(?:if|what if|suppose|supposing|imagine|hypothetically|for example|e\.g\.)\b",
+    re.IGNORECASE,
+)
 
 DEADLINE_MARKERS = (
     "no later than ",
@@ -117,6 +149,15 @@ def _split_deadline(action: str, timezone: str):
         parsed = parse_deadline(tail, timezone)
         if parsed is not None:
             return action[:index].strip(" ,"), parsed
+
+    # A bare date phrase ("... tomorrow evening") has no marker word.
+    parsed = parse_deadline(action, timezone)
+    if parsed is not None and parsed.label:
+        without_label = re.sub(
+            rf"\s*{re.escape(parsed.label)}\s*$", "", action, flags=re.IGNORECASE
+        )
+        if without_label != action:
+            return without_label.strip(" ,"), parsed
     return action, None
 
 
@@ -131,6 +172,8 @@ def _priority(text: str) -> str:
 def extract_commitment(text: str, timezone: str = "UTC") -> Extracted | None:
     """Extract a commitment from a sentence, or ``None`` if it is not one."""
     if not text or not text.strip():
+        return None
+    if HYPOTHETICAL.search(text) or text.lstrip().startswith(("\"", "'", "“")):
         return None
 
     for pattern, expects_recipient in PATTERNS:
@@ -147,6 +190,11 @@ def extract_commitment(text: str, timezone: str = "UTC") -> Extracted | None:
         action = _replace_pronoun(_clean(action), recipient)
         if not action:
             continue
+
+        if not recipient:
+            relationship = RELATIONSHIP_PATTERN.search(action)
+            if relationship:
+                recipient = relationship.group(1).lower()
 
         title = action[0].upper() + action[1:]
         ambiguous = bool(deadline and deadline.ambiguous)

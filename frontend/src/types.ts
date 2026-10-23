@@ -80,6 +80,31 @@ export interface ChatReply {
   tools_used: string[]
 }
 
+export interface McpToolInfo {
+  name: string
+  description: string
+}
+
+export interface McpStatus {
+  transport: "streamable-http"
+  endpoint: string
+  connected: boolean
+  protocol_version: string
+  server_name: string
+  chat_transport: string
+  tools: McpToolInfo[]
+}
+
+export interface McpReadResult {
+  tool: string
+  protocol_version: string
+  server_name: string
+  result: {
+    count: number
+    commitments: Pick<Commitment, "id" | "title">[]
+  }
+}
+
 export interface CommitmentInput {
   title: string
   recipient?: string | null

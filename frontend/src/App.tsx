@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react"
 
 import { ChatPanel } from "@/components/ChatPanel"
 import { Dashboard } from "@/components/Dashboard"
+import { McpPanel } from "@/components/McpPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -202,7 +203,8 @@ export default function App() {
           />
         </div>
 
-        <div className="lg:sticky lg:top-5 lg:self-start">
+        <div className="space-y-4 lg:sticky lg:top-5 lg:self-start">
+          <McpPanel />
           <ChatPanel
             messages={messages}
             confirmation={confirmation}

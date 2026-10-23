@@ -52,6 +52,15 @@ def test_bare_weekday_is_ambiguous():
     assert deadline.date == date(2026, 10, 23)
     assert deadline.ambiguous is True
     assert deadline.question is not None
+    assert "Which Friday" in deadline.question
+
+
+def test_deadline_marker_is_not_repeated_in_clarification():
+    deadline = parse_deadline("by Friday", "UTC", NOW)
+    assert deadline is not None
+    assert deadline.question is not None
+    assert "Which Friday" in deadline.question
+    assert "By Friday" not in deadline.question
 
 
 def test_next_weekday_is_not_ambiguous():

@@ -35,13 +35,20 @@ class Settings(BaseSettings):
     seed_api_key: str = ""
     seed_user_email: str = "demo@promiseloop.local"
 
-    # AI provider: "mock" (offline, deterministic) or "openai" (OpenAI-compatible).
+    # AI provider: "mock" (offline, deterministic), "gemini", or "openai"
+    # (any OpenAI-compatible endpoint).
     llm_provider: str = "mock"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.2
     llm_timeout_seconds: float = 45.0
+
+    # Gemini uses its OpenAI-compatible endpoint, so it shares the provider code.
+    # GEMINI_API_KEY is read from the environment; it is never sent to the browser.
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_model: str = "gemini-3.5-flash-lite"
 
     # MCP
     mcp_server_command: str = ""

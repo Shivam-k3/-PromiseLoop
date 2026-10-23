@@ -19,7 +19,7 @@ the way a third-party assistant would use them.
 | --- | --- |
 | API | FastAPI (async) + Pydantic v2 |
 | Data | SQLAlchemy 2.0 async, SQLite locally, Supabase/Postgres in production |
-| AI | Pluggable provider: offline `mock` or any OpenAI-compatible endpoint (OpenAI, Bedrock, Groq, Ollama...) |
+| AI | Google Gemini via its OpenAI-compatible endpoint, plus offline `mock` and any OpenAI-compatible endpoint |
 | Tools | MCP server (FastMCP) with 6 tools, three transports |
 | UI | React 19 + TypeScript + Vite + Tailwind v4 |
 
@@ -35,14 +35,14 @@ backend/
     schemas.py         request & response models
     security.py        API key hashing
     deps.py            authentication dependencies
-    routers/           health, commitments, dashboard, chat
+    routers/           health, commitments, dashboard, chat, MCP demo
     services/          commitment logic, dependency graph, deadline parsing
     llm/               provider, extraction, offline mock planner, agent loop
     mcp_server/        MCP server, auth context, MCP client
   migrations/001_init.sql   Postgres DDL generated from the models
-  tests/                      pytest suite (62 tests)
+  tests/                      pytest suite (95 tests)
 frontend/
-  src/components/      Dashboard, CommitmentCard, ChatPanel, MicButton
+  src/components/      Dashboard, CommitmentCard, ChatPanel, McpPanel, MicButton
   src/components/ui/   hand-rolled shadcn-style primitives
   src/lib/             api client, formatting helpers
 ```
@@ -65,7 +65,15 @@ python -m uvicorn app.main:app --reload --port 8000
 ```
 DATABASE_URL=sqlite+aiosqlite:///./promiseloop.db
 SEED_API_KEY=<any long random string>
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=<your Gemini API key>
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
+
+`GEMINI_BASE_URL` defaults to
+`https://generativelanguage.googleapis.com/v1beta/openai`. The real key belongs only in
+`backend/.env`, which is gitignored. If `GEMINI_API_KEY` is also set in the OS
+environment, the OS value wins; unset it to use the `.env` value.
 
 For production set `DATABASE_URL` to the Supabase Postgres URI and run
 `migrations/001_init.sql` in the Supabase SQL editor.
@@ -76,6 +84,22 @@ Check it is alive:
 curl http://127.0.0.1:8000/health
 curl -H "X-API-Key: <SEED_API_KEY>" http://127.0.0.1:8000/api/commitments
 ```
+
+To run the MCP panel and chat against a real Streamable HTTP MCP session, start the MCP
+server in a second terminal and start the API with `MCP_TRANSPORT=http`:
+
+```bash
+# terminal 1 (from backend/)
+python -m app.mcp_server.server --http --port 8001
+
+# terminal 2 (from backend/)
+# PowerShell
+$env:MCP_TRANSPORT="http"; python -m uvicorn app.main:app --reload --port 8000
+# macOS/Linux
+MCP_TRANSPORT=http python -m uvicorn app.main:app --reload --port 8000
+```
+
+`MCP_HTTP_URL` defaults to `http://127.0.0.1:8001/mcp`.
 
 ### 2. Frontend
 
@@ -92,10 +116,12 @@ needed for local development.
 ### 3. Try it
 
 1. Open <http://localhost:5173> - the frontend sends `VITE_API_KEY` with every request.
-2. Say: **"I promised Abhishek that I'll send him our project demo by tomorrow evening."**
-3. The assistant extracts the promise and asks *"Shall I save this commitment?"* - nothing
+2. The **MCP connection** panel shows the negotiated protocol, server name, transport and
+   the six discovered tools. Use **Read commitments** to run a real read-only `tools/call`.
+3. Say: **"I promised Abhishek that I'll send him our project demo by tomorrow evening."**
+4. The assistant extracts the promise and asks *"Shall I save this commitment?"* - nothing
    is written until you confirm.
-4. Confirm, then ask: **"What should I do next?"** - the answer comes from the database
+5. Confirm, then ask: **"What should I do next?"** - the answer comes from the database
    through the MCP `get_next_actions` tool, not from the model's imagination.
 
 ## How it works
@@ -141,6 +167,10 @@ python -m app.mcp_server.server              # stdio
 python -m app.mcp_server.server --http       # streamable HTTP on :8001
 ```
 
+The **MCP connection** panel calls `GET /api/mcp/status` and `POST /api/mcp/read`, so it
+shows the negotiated protocol and a real `tools/call` even before you chat. Set
+`MCP_TRANSPORT=http` to make `/api/chat` use the same HTTP server.
+
 Every tool resolves the caller from the API key in the session context and scopes its
 queries to that user, so one key can never read another user's commitments.
 
@@ -161,20 +191,23 @@ queries to that user, so one key can never read another user's commitments.
 | GET | `/api/dashboard` | Counts, upcoming list, next actions |
 | POST | `/api/chat` | Conversational turn, returns `{reply, confirmation, tools_used}` |
 | POST | `/api/chat/confirm` | Executes a staged draft through MCP |
+| GET | `/api/mcp/status` | Live MCP `initialize` + `tools/list`; transport, protocol, server |
+| POST | `/api/mcp/read` | Read-only MCP `tools/call` (`list_commitments`) |
 
 All `/api/*` routes need `X-API-Key: <key>` (or `Authorization: Bearer <key>`).
 
 ## Tests
 
 ```bash
-cd backend && python -m pytest -q     # 62 passed
-cd frontend && npm test               # 10 passed
+cd backend && python -m pytest -q     # 95 passed
+cd frontend && npm test               # 13 passed
 cd frontend && npm run build          # type-check + production build
 ```
 
 The backend suite covers the API and auth, the dependency graph and cycle prevention,
-deadline parsing, the MCP tools over the in-memory and the stdio transport, and the
-full chat flow (extract -> confirm -> save, and question answering through the tools).
+deadline parsing, the MCP tools over the in-memory, stdio and Streamable HTTP transports,
+and the full chat flow (extract -> confirm -> save, and question answering through the
+tools). The frontend suite covers the dashboard and the MCP connection panel.
 
 ## Notes
 
@@ -182,6 +215,10 @@ full chat flow (extract -> confirm -> save, and question answering through the t
   digests, and the raw key only ever lives in the request that needs it.
 * `LLM_PROVIDER=mock` needs no key and no network - the offline planner uses the same
   extraction and the same MCP tool loop as a real model, which makes the demo
-  reproducible. Point `LLM_BASE_URL`/`LLM_API_KEY` at a real model to switch over.
+  reproducible. `LLM_PROVIDER=gemini` uses the live Gemini model; if a model returns
+  HTTP 503 high demand, switch `GEMINI_MODEL`.
+* The confirmation gate is enforced in the backend, not only in the UI: a model tool call
+  for `create_commitment` is staged in the response, and only `POST /api/chat/confirm`
+  performs the MCP write.
 * Voice input uses the browser's Web Speech API (Chrome/Edge). It is a convenience,
   not a dependency.

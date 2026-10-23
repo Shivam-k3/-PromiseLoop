@@ -47,8 +47,15 @@ class McpTool:
 class McpClient:
     """Thin wrapper around a live ``ClientSession``."""
 
-    def __init__(self, session: ClientSession) -> None:
+    def __init__(
+        self,
+        session: ClientSession,
+        protocol_version: str | None = None,
+        server_name: str | None = None,
+    ) -> None:
         self._session = session
+        self.protocol_version = protocol_version
+        self.server_name = server_name
 
     async def list_tools(self) -> list[McpTool]:
         result = await self._session.list_tools()
@@ -116,8 +123,12 @@ async def open_client(api_key: str, transport: str | None = None) -> AsyncIterat
             settings.mcp_http_url, headers={"X-API-Key": api_key}
         ) as (read, write, _):
             async with ClientSession(read, write) as session:
-                await session.initialize()
-                yield McpClient(session)
+                initialized = await session.initialize()
+                yield McpClient(
+                    session,
+                    protocol_version=initialized.protocolVersion,
+                    server_name=initialized.serverInfo.name,
+                )
         return
 
     if mode == "stdio":
@@ -128,8 +139,12 @@ async def open_client(api_key: str, transport: str | None = None) -> AsyncIterat
         params = StdioServerParameters(command=parts[0], args=parts[1:], env=env)
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
-                await session.initialize()
-                yield McpClient(session)
+                initialized = await session.initialize()
+                yield McpClient(
+                    session,
+                    protocol_version=initialized.protocolVersion,
+                    server_name=initialized.serverInfo.name,
+                )
         return
 
     raise ValueError(f"Unknown MCP transport: {mode}")

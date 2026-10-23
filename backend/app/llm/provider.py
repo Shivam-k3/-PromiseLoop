@@ -1,7 +1,9 @@
 """LLM provider abstraction.
 
-Two providers ship with PromiseLoop:
+Three providers ship with PromiseLoop:
 
+* ``gemini`` - Google Gemini through its OpenAI-compatible endpoint. Configured
+  with ``GEMINI_API_KEY`` / ``GEMINI_MODEL``.
 * ``openai`` - any OpenAI-compatible ``/chat/completions`` endpoint (OpenAI,
   Amazon Bedrock, Groq, OpenRouter, Ollama, ...). Configured with
   ``LLM_BASE_URL`` / ``LLM_API_KEY`` / ``LLM_MODEL``.
@@ -9,10 +11,11 @@ Two providers ship with PromiseLoop:
   the same tool-calling loop, so the whole demo (including MCP) works without
   credentials.
 
-Both speak the same message format as the OpenAI chat API, so the agent code
-never has to care which one is in use.
+All providers speak the same message format as the OpenAI chat API, so the
+agent code never has to care which one is in use.
 """
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -27,12 +30,22 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    extra_content: dict[str, Any] | None = None
 
 
 @dataclass
 class LLMResponse:
     content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+class ProviderError(RuntimeError):
+    """Sanitized provider failure: safe to show to the user."""
+
+    def __init__(self, status_code: int, category: str) -> None:
+        super().__init__(f"LLM request failed ({status_code}): {category}")
+        self.status_code = status_code
+        self.category = category
 
 
 class LLMProvider(Protocol):
@@ -69,15 +82,27 @@ class OpenAICompatibleProvider:
         return headers
 
     async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions", headers=self._headers(), json=payload
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(
-                    f"LLM request failed ({response.status_code}): {response.text[:500]}"
-                )
-            return response.json()
+        retryable = {429, 500, 502, 503, 504}
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=self._headers(),
+                        json=payload,
+                    )
+            except httpx.RequestError as exc:
+                if attempt == 2:
+                    raise ProviderError(0, "network/timeout") from exc
+            else:
+                if response.status_code < 400:
+                    return response.json()
+                if response.status_code not in retryable or attempt == 2:
+                    raise ProviderError(
+                        response.status_code, _error_category(response.status_code)
+                    )
+            await asyncio.sleep(0.8 * (attempt + 1))
+        raise ProviderError(0, "network/timeout")
 
     async def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
@@ -98,6 +123,9 @@ class OpenAICompatibleProvider:
                 id=call.get("id", f"call_{index}"),
                 name=(call.get("function") or {}).get("name", ""),
                 arguments=_safe_json((call.get("function") or {}).get("arguments")),
+                extra_content=call.get("extra_content")
+                if isinstance(call.get("extra_content"), dict)
+                else None,
             )
             for index, call in enumerate(message.get("tool_calls") or [])
         ]
@@ -117,13 +145,27 @@ class OpenAICompatibleProvider:
         }
         try:
             data = await self._post(payload)
-        except RuntimeError:
+        except ProviderError as exc:
+            if exc.status_code not in {400, 404, 422}:
+                raise
             # Endpoints without json_schema support still accept json_object.
             payload["response_format"] = {"type": "json_object"}
             data = await self._post(payload)
 
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or "{}"
         return json.loads(content)
+
+
+def _error_category(status_code: int) -> str:
+    if status_code in (401, 403):
+        return "authentication/configuration"
+    if status_code == 404:
+        return "model or endpoint not found"
+    if status_code == 429:
+        return "rate limit or quota"
+    if status_code >= 500:
+        return "provider unavailable"
+    return "request rejected"
 
 
 def _safe_json(value: Any) -> dict[str, Any]:
@@ -139,9 +181,28 @@ def _safe_json(value: Any) -> dict[str, Any]:
 
 
 def build_provider() -> LLMProvider:
-    """Return the configured provider."""
+    """Return the explicitly configured provider.
+
+    An unknown provider name is an error, never a silent fallback to mock.
+    """
     settings = get_settings()
-    if settings.llm_provider.lower() == "openai":
+    name = settings.llm_provider.strip().lower()
+
+    if name == "gemini":
+        api_key = settings.gemini_api_key or settings.llm_api_key
+        if not api_key:
+            raise RuntimeError(
+                "LLM_PROVIDER=gemini but GEMINI_API_KEY (or LLM_API_KEY) is not set"
+            )
+        return OpenAICompatibleProvider(
+            base_url=settings.gemini_base_url,
+            api_key=api_key,
+            model=settings.gemini_model,
+            temperature=settings.llm_temperature,
+            timeout=settings.llm_timeout_seconds,
+        )
+
+    if name == "openai":
         return OpenAICompatibleProvider(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
@@ -149,6 +210,10 @@ def build_provider() -> LLMProvider:
             temperature=settings.llm_temperature,
             timeout=settings.llm_timeout_seconds,
         )
-    from app.llm.mock import MockProvider
 
-    return MockProvider()
+    if name in {"mock", ""}:
+        from app.llm.mock import MockProvider
+
+        return MockProvider()
+
+    raise RuntimeError(f"Unknown LLM_PROVIDER: {settings.llm_provider}")

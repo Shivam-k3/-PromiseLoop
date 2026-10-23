@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.config import get_settings
 from app.db import dispose_db, init_db
-from app.routers import chat, commitments, dashboard, health
+from app.routers import chat, commitments, dashboard, health, mcp_demo
 from app.seed import ensure_seed_user
 
 settings = get_settings()
@@ -42,3 +42,4 @@ app.include_router(health.router)
 app.include_router(commitments.router, prefix=settings.api_prefix)
 app.include_router(dashboard.router, prefix=settings.api_prefix)
 app.include_router(chat.router, prefix=settings.api_prefix)
+app.include_router(mcp_demo.router, prefix=settings.api_prefix)
