@@ -26,10 +26,11 @@ def render() -> str:
 
     parts.append(
         """
--- Row Level Security note:
--- The FastAPI backend connects with the service role and enforces
--- authorisation in Python (every query is filtered by user_id). If you also
--- expose the tables through PostgREST, enable RLS as well:
+-- Row Level Security:
+-- The backend connects with a privileged database role and enforces
+-- authorisation in Python (every query is filtered by user_id). Add
+-- policies before exposing these tables to PostgREST clients.
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE commitments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE commitment_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity ENABLE ROW LEVEL SECURITY;

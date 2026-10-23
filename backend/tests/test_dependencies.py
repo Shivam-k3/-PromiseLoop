@@ -1,6 +1,13 @@
 """Dependency tracking: blocking, unblocking, cycle rejection."""
 
+import uuid
+
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import engine
+from app.models import Commitment, CommitmentDependency
 
 BASE = {"title": "Task", "timezone": "UTC"}
 
@@ -87,6 +94,35 @@ async def test_dependency_can_be_removed(client: AsyncClient):
     response = await client.delete(f"/api/commitments/{b['id']}/dependencies/{a['id']}")
     assert response.status_code == 200
     assert response.json()["depends_on_ids"] == []
+
+
+async def test_commitments_and_dependencies_survive_database_pool_restart(client: AsyncClient):
+    prerequisite = await create(client, "Draft slides")
+    dependent = await create(client, "Send slides")
+    linked = await client.post(
+        f"/api/commitments/{dependent['id']}/dependencies",
+        json={"depends_on_id": prerequisite["id"]},
+    )
+    assert linked.status_code == 200, linked.text
+
+    # A new connection after disposal models the server reopening its database
+    # connection pool. The file-backed SQLite test database keeps committed rows.
+    await engine.dispose()
+
+    refreshed = await client.get(f"/api/commitments/{dependent['id']}")
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["depends_on_ids"] == [prerequisite["id"]]
+
+    async with AsyncSession(engine) as session:
+        stored_commitment = await session.get(Commitment, uuid.UUID(dependent["id"]))
+        stored_dependency = await session.scalar(
+            select(CommitmentDependency).where(
+                CommitmentDependency.commitment_id == uuid.UUID(dependent["id"]),
+                CommitmentDependency.depends_on_id == uuid.UUID(prerequisite["id"]),
+            )
+        )
+    assert stored_commitment is not None
+    assert stored_dependency is not None
 
 
 async def test_dashboard_reports_blocked_commitments(client: AsyncClient):

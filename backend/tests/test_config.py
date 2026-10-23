@@ -1,6 +1,7 @@
 """Settings parsing and the demo user bootstrap."""
 
 from app.config import Settings
+from app.db import _async_database_url
 from app.seed import ensure_seed_user
 
 
@@ -21,6 +22,27 @@ def test_database_url_defaults_to_local_sqlite(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     settings = Settings(_env_file=None)
     assert settings.is_sqlite
+
+
+def test_supabase_dashboard_url_uses_asyncpg_and_requires_ssl():
+    url, connect_args = _async_database_url(
+        "postgresql://postgres:secret@db.example.supabase.co:5432/postgres?sslmode=require"
+    )
+
+    assert url.drivername == "postgresql+asyncpg"
+    assert url.host == "db.example.supabase.co"
+    assert url.password == "secret"
+    assert "sslmode" not in url.query
+    assert connect_args == {"ssl": "require"}
+
+
+def test_supabase_asyncpg_url_is_left_as_asyncpg():
+    url, connect_args = _async_database_url(
+        "postgresql+asyncpg://postgres:secret@db.example.supabase.co:5432/postgres"
+    )
+
+    assert url.drivername == "postgresql+asyncpg"
+    assert connect_args == {}
 
 
 async def test_seed_user_is_created_once():
